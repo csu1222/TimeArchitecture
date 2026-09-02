@@ -248,6 +248,7 @@ public static class TimeArchitectureDebugPanelPrefabBuilder
         image.color = ButtonColor;
         Button button = buttonObject.AddComponent<Button>();
         button.targetGraphic = image;
+        buttonObject.AddComponent<LayoutElement>().preferredHeight = 34f;
         TMP_Text label = CreateText("Label", caption, buttonObject.transform, 16f, FontStyles.Bold, TextAlignmentOptions.Center);
         RectTransform labelRect = label.rectTransform;
         labelRect.anchorMin = Vector2.zero;

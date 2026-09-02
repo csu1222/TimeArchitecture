@@ -3,11 +3,15 @@ using System.Collections.Generic;
 using TMPro;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 public static class TimeArchitectureDebugPanelPlayModeValidator
 {
     private const string MenuPath = "Tools/Time Architecture/Validate Debug Panel Play Mode";
+    private const string PointerDiagnosticsMenuPath =
+        "Tools/Time Architecture/Enable Pointer Diagnostics (15 Seconds)";
 
     [MenuItem(MenuPath, true)]
     private static bool CanValidate()
@@ -43,6 +47,33 @@ public static class TimeArchitectureDebugPanelPlayModeValidator
             Debug.LogError(
                 $"Time Architecture Debug Panel PlayMode validation: FAIL\n{exception}");
         }
+    }
+
+    [MenuItem(PointerDiagnosticsMenuPath, true)]
+    private static bool CanEnablePointerDiagnostics()
+    {
+        return EditorApplication.isPlaying;
+    }
+
+    [MenuItem(PointerDiagnosticsMenuPath)]
+    private static void EnablePointerDiagnostics()
+    {
+        TimeArchitectureDebugPanel panel =
+            UnityEngine.Object.FindFirstObjectByType<TimeArchitectureDebugPanel>();
+        if (panel == null)
+        {
+            Debug.LogError("Pointer diagnostics requires TimeArchitectureDebugPanel in PlayMode.");
+            return;
+        }
+
+        TimeArchitectureDebugPanelPointerDiagnostics diagnostics =
+            panel.GetComponent<TimeArchitectureDebugPanelPointerDiagnostics>();
+        if (diagnostics == null)
+        {
+            diagnostics = panel.gameObject.AddComponent<TimeArchitectureDebugPanelPointerDiagnostics>();
+        }
+
+        diagnostics.Begin(15f);
     }
 
     private static Dictionary<string, Button> GetButtons(TimeArchitectureDebugPanel panel)
@@ -175,5 +206,146 @@ public static class TimeArchitectureDebugPanelPlayModeValidator
         {
             throw new InvalidOperationException(message);
         }
+    }
+}
+
+public sealed class TimeArchitectureDebugPanelPointerDiagnostics : MonoBehaviour
+{
+    private readonly List<RaycastResult> raycastResults = new List<RaycastResult>();
+
+    private float finishTime;
+    private int pressCount;
+    private string lastTopTarget;
+    private bool running;
+
+    public void Begin(float durationSeconds)
+    {
+        finishTime = Time.realtimeSinceStartup + durationSeconds;
+        pressCount = 0;
+        lastTopTarget = null;
+        running = true;
+
+        Debug.Log(
+            $"Pointer diagnostics started for {durationSeconds:F0} seconds. " +
+            $"Move the pointer over a Debug Panel button and left-click it. " +
+            $"Button screen centers: {DescribeButtonCenters()}",
+            this);
+    }
+
+    private void Update()
+    {
+        if (!running)
+        {
+            return;
+        }
+
+        if (Time.realtimeSinceStartup >= finishTime)
+        {
+            running = false;
+            Debug.Log($"Pointer diagnostics finished. Left Click presses detected: {pressCount}.", this);
+            return;
+        }
+
+        Mouse mouse = Mouse.current;
+        EventSystem eventSystem = EventSystem.current;
+        if (mouse == null || eventSystem == null)
+        {
+            running = false;
+            Debug.LogError(
+                $"Pointer diagnostics stopped. Mouse: {(mouse == null ? "missing" : "available")}, " +
+                $"EventSystem: {(eventSystem == null ? "missing" : "available")}.",
+                this);
+            return;
+        }
+
+        Vector2 position = mouse.position.ReadValue();
+        PointerEventData pointerData = new PointerEventData(eventSystem)
+        {
+            position = position
+        };
+
+        raycastResults.Clear();
+        eventSystem.RaycastAll(pointerData, raycastResults);
+
+        string topTarget = DescribeTopTarget();
+        if (topTarget != lastTopTarget)
+        {
+            lastTopTarget = topTarget;
+            Debug.Log($"Pointer hover at {position}: {topTarget}", this);
+        }
+
+        if (mouse.leftButton.wasPressedThisFrame)
+        {
+            pressCount++;
+            Debug.Log(
+                $"Left Click detected at {position}. " +
+                $"IsPointerOverGameObject: {eventSystem.IsPointerOverGameObject()}. " +
+                $"Raycast hits: {DescribeRaycastHits()}",
+                this);
+        }
+    }
+
+    private string DescribeButtonCenters()
+    {
+        List<string> descriptions = new List<string>();
+        foreach (Button button in GetComponentsInChildren<Button>(true))
+        {
+            RectTransform rectTransform = button.GetComponent<RectTransform>();
+            Image image = button.GetComponent<Image>();
+            Vector2 center = RectTransformUtility.WorldToScreenPoint(
+                null,
+                button.transform.position);
+            descriptions.Add(
+                $"{button.name}=" +
+                $"center:{center}, " +
+                $"size:{rectTransform.rect.size}, " +
+                $"imageEnabled:{image != null && image.enabled}, " +
+                $"raycastTarget:{image != null && image.raycastTarget}, " +
+                $"culled:{image != null && image.canvasRenderer.cull}");
+        }
+
+        return string.Join(", ", descriptions);
+    }
+
+    private string DescribeTopTarget()
+    {
+        if (raycastResults.Count == 0)
+        {
+            return "no UI raycast hit";
+        }
+
+        GameObject target = raycastResults[0].gameObject;
+        Button button = target.GetComponentInParent<Button>();
+        return button == null
+            ? $"top={GetPath(target.transform)}, button=none"
+            : $"top={GetPath(target.transform)}, button={button.name}, interactable={button.interactable}";
+    }
+
+    private string DescribeRaycastHits()
+    {
+        if (raycastResults.Count == 0)
+        {
+            return "none";
+        }
+
+        List<string> descriptions = new List<string>(raycastResults.Count);
+        foreach (RaycastResult result in raycastResults)
+        {
+            descriptions.Add(GetPath(result.gameObject.transform));
+        }
+
+        return string.Join(" -> ", descriptions);
+    }
+
+    private static string GetPath(Transform target)
+    {
+        string path = target.name;
+        while (target.parent != null)
+        {
+            target = target.parent;
+            path = $"{target.name}/{path}";
+        }
+
+        return path;
     }
 }
